@@ -4,9 +4,7 @@ import tkinter as tk
 from tkinter import Label, scrolledtext, Toplevel, Listbox, Button
 from constants import IP, PORT
 from db_manager import DatabaseManager
-from create_tables import create_all_tables, populate_media_menu
-from hide_png import DataHider
-from decode_png import ImageExtractor
+from create_tables import create_all_tables
 from datetime import datetime
 from PIL import Image, ImageTk
 import os
@@ -17,13 +15,11 @@ from encrypt import Encryption
 class Server:
     def __init__(self):
         # Initialize database connection
-        self.db_manager = DatabaseManager("localhost", "root", "MooPassword1", "mysql")
+        self.db_manager = DatabaseManager("localhost", "root", "Jb240108", "mysql")
         create_all_tables(self.db_manager)
-        populate_media_menu(self.db_manager)
         
-        # Initialize encryption
-        self.encryptor = Encryption()
-        
+        # IMPORTANT: load server private key to decrypt incoming AES keys
+        self.encryptor = Encryption(rsa_private_key_path="server_private.pem")
         # Initialize GUI components
         self.root = tk.Tk()
         self.root.withdraw()
@@ -34,9 +30,9 @@ class Server:
 
     def play_audio(self):
         pygame.mixer.init()
-        pygame.mixer.music.load(r"C:\Users\maria\Downloads\ZAZ - Je veux (Clip officiel).mp3")
+        pygame.mixer.music.load(r"C:\\Users\\jonat\\Desktop\\מדעי המחשב\\סייבר עם מריה\\Jonathan\\intro.mp3")
         pygame.mixer.music.play()
-        pygame.mixer.music.queue(r"C:\Users\maria\Downloads\Angels Calling.mp3")
+        pygame.mixer.music.queue(r"C:\\Users\\jonat\\Desktop\\מדעי המחשב\\סייבר עם מריה\\Jonathan\\montana skies.mp3")
 
     def update_gui_log(self, message):
         self.log_text.config(state=tk.NORMAL)
@@ -45,10 +41,15 @@ class Server:
         self.log_text.yview(tk.END)
 
     def update_client_list(self):
+        if not self.client_listbox:
+            return
         self.client_listbox.delete(0, tk.END)
-        clients = self.db_manager.get_rows_with_value("clients", "1", "1")
-        for client in clients:
-            self.client_listbox.insert(tk.END, client[0])
+        try:
+            clients = self.db_manager.get_rows_with_value("clients", "1", "1")
+            for client in clients:
+                self.client_listbox.insert(tk.END, client[0])
+        except Exception:
+            pass
 
     def show_client_details(self, client_id):
         client_data = self.db_manager.get_rows_with_value("clients", "client_id", client_id)
@@ -61,7 +62,7 @@ class Server:
         details_window.geometry("400x350")
 
         # Create and store image reference in the window itself to prevent garbage collection
-        bg_image = ImageTk.PhotoImage(Image.open(r"C:\Users\maria\OneDrive\Pictures\logo_cyber.jpeg"))
+        bg_image = ImageTk.PhotoImage(Image.open(r"C:\Users\maria\OneDrive\Dokumenti\סייבר חומרים\Jonathan\logo_cyber.jpeg"))
         bg_label = Label(details_window, image=bg_image)
         bg_label.image = bg_image  # Keep a reference to prevent garbage collection
         bg_label.place(relwidth=1, relheight=1)
@@ -88,7 +89,7 @@ class Server:
         history_window.geometry("600x400")
 
         # Create and store image reference in the window itself
-        bg_image = ImageTk.PhotoImage(Image.open(r"C:\Users\maria\OneDrive\Pictures\logo_cyber.jpeg"))
+        bg_image = ImageTk.PhotoImage(Image.open(r"C:\Users\maria\OneDrive\Dokumenti\סייבר חומרים\Jonathan\logo_cyber.jpeg"))
         bg_label = Label(history_window, image=bg_image)
         bg_label.image = bg_image  # Keep a reference to prevent garbage collection
         bg_label.place(relwidth=1, relheight=1)
@@ -119,62 +120,74 @@ class Server:
     def handle_client(self, client_socket):
         client_id = 'unknown'
         try:
-            client_id = self.encryptor.receive_encrypted_message(client_socket)
-            client_ip, client_port = client_socket.getpeername()
+            # 1) First — receive AES key (encrypted with server RSA). This sets self.encryptor.aes_key
+            try:
+                self.encryptor.receive_aes_key(client_socket)
+            except Exception as e:
+                self.update_gui_log(f"Failed to receive AES key from client: {e}")
+                client_socket.close()
+                return
 
-            existing_client = self.db_manager.get_rows_with_value("clients", "client_id", client_id)
+            # 2) Now receive the next encrypted message (client id or LOGIN|user|pass)
+            try:
+                incoming = self.encryptor.receive_encrypted_message(client_socket)
+            except Exception as e:
+                self.update_gui_log(f"Failed to receive encrypted message: {e}")
+                client_socket.close()
+                return
 
-            if existing_client:
-                db_ip, db_port, _, _, total_actions = existing_client[0][1:6]
-                if db_ip == client_ip and db_port == str(client_port):
-                    self.db_manager.update_row("clients", "client_id", client_id, ["last_seen"], [datetime.now()])
+            if not incoming:
+                self.update_gui_log("Received empty message.")
+                client_socket.close()
+                return
+
+            # Determine message type
+            if incoming.startswith("LOGIN|"):
+                parts = incoming.split("|", 2)
+                if len(parts) == 3:
+                    _, username, password = parts
+                    client_id = username  # or another mapping you prefer
+                    # Here you can validate the user against DB (hash compare, etc.)
+                    # For now, simply acknowledge
+                    self.encryptor.send_encrypted_message(client_socket, "WELCOME BACK")
+                    client_status = "LOGIN_RECEIVED"
+                    total_actions = 0
+                else:
+                    self.encryptor.send_encrypted_message(client_socket, "INVALID_LOGIN_FORMAT")
+                    client_socket.close()
+                    return
+            else:
+                # treat message as client_id
+                client_id = incoming
+                # check DB for client_id (optional)
+                existing_client = self.db_manager.get_rows_with_value("clients", "client_id", client_id)
+                if existing_client:
                     self.encryptor.send_encrypted_message(client_socket, "WELCOME BACK")
                     client_status = "EXISTING"
                 else:
-                    self.db_manager.update_row("clients", "client_id", client_id,
-                               ["client_ip", "client_port", "last_seen"],
-                               [client_ip, client_port, datetime.now()])
-                    self.encryptor.send_encrypted_message(client_socket, "WELCOME BACK (Updated Info)")
-                    client_status = "EXISTING (Updated IP/Port)"
-            else:
-                self.db_manager.insert_row("clients",
-                           "(client_id, client_ip, client_port, last_seen, ddos_status, total_sent_media)",
-                           "(%s, %s, %s, %s, %s, %s)",
-                           (client_id, client_ip, client_port, datetime.now(), False, 0))
-                self.encryptor.send_encrypted_message(client_socket, "WELCOME TO MASKER SERVER!")
-                client_status = "NEW"
-                total_actions = 0
+                    # Insert new client (limited info available)
+                    try:
+                        self.db_manager.insert_row(
+                            "clients",
+                            "(client_id, client_username, client_password, client_ip, client_port, client_last_active, client_ddos_status)",
+                            "(%s, %s, %s, %s, %s, %s, %s)",
+                            (client_id, "", "", client_socket.getpeername()[0], client_socket.getpeername()[1], datetime.now(), 0)
+                        )
+                    except Exception:
+                        pass
+                    self.encryptor.send_encrypted_message(client_socket, "WELCOME TO MASKER SERVER!")
+                    client_status = "NEW"
+                    total_actions = 0
 
+            # Log and refresh UI
             self.update_gui_log(f"Client {client_id} connected - Status: {client_status}")
             self.update_client_list()
 
-            while True:
-                self.encryptor.send_encrypted_message(client_socket, "\n1: Hide Data\n2: Decode Data\n3: Logout")
-                option = self.encryptor.receive_encrypted_message(client_socket)
-
-                if option == "1":
-                    hider = DataHider(client_socket, self.db_manager, client_id)
-                    result = hider.run()
-                    if result:
-                        media_id, media_type_id, path = result
-                        total_actions += 1
-                        self.db_manager.update_row("clients", "client_id", client_id, ["total_sent_media"], [total_actions])
-                        self.db_manager.insert_decrypted_media(client_id, media_type_id, path)
-                elif option == "2":
-                    extractor = ImageExtractor(client_socket, self.db_manager, client_id)
-                    media_id, media_type, path = extractor.run()
-                    total_actions += 1
-                    self.db_manager.update_row("clients", "client_id", client_id, ["total_sent_media"], [total_actions])
-                    self.db_manager.insert_decrypted_media(client_id, media_id, path)
-                elif option == "3":
-                    self.update_gui_log(f"Client {client_id} disconnected.")
-                    break
-                else:
-                    self.encryptor.send_encrypted_message(client_socket, "Invalid option.")
-        except Exception as e:
-            self.update_gui_log(f"Error handling client {client_id}: {e}")
         finally:
-            client_socket.close()
+            try:
+                client_socket.close()
+            except Exception:
+                pass
             self.update_client_list()
 
     def start_server(self):
@@ -195,7 +208,7 @@ class Server:
         splash.overrideredirect(True)
 
         # Load and keep reference to splash image
-        logo = Image.open(r"C:\Users\maria\Downloads\Leonardo_Phoenix_10_A_whimsical_illustration_of_a_small_Pokmon_0.jpg").resize((400, 400))
+        logo = Image.open(r"C:\\Users\\jonat\\Desktop\\מדעי המחשב\\סייבר עם מריה\\loading.png").resize((400, 400))
         logo_photo = ImageTk.PhotoImage(logo)
         label = Label(splash, image=logo_photo)
         label.image = logo_photo  # Keep reference
@@ -212,7 +225,7 @@ class Server:
         self.root.geometry("500x500")
 
         # Load and keep reference to background image
-        self.bg_image = ImageTk.PhotoImage(Image.open(r"C:\Users\maria\Downloads\Leonardo_Phoenix_10_Illustrate_a_futuristic_vision_of_the_sql_0 (2).jpg"))
+        self.bg_image = ImageTk.PhotoImage(Image.open(r"C:\\Users\\jonat\\Desktop\\מדעי המחשב\\סייבר עם מריה\\background.webp"))
         bg_label = Label(self.root, image=self.bg_image)
         bg_label.place(relwidth=1, relheight=1)
 

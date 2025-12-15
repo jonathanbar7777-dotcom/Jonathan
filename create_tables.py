@@ -1,4 +1,5 @@
-from db_manager import DatabaseManager
+from db_manager import *
+from db_tools import *
 
 def create_all_tables(db_manager):
     """
@@ -9,38 +10,19 @@ def create_all_tables(db_manager):
     """
     db_manager.create_table(
         "clients",
-        "(client_id INT PRIMARY KEY, client_ip VARCHAR(255), client_port INT, last_seen DATETIME, ddos_status BOOLEAN, total_sent_media INT)"
+        "(client_id INT PRIMARY KEY,client_username VARCHAR(255), client_password VARCHAR(255), client_ip VARCHAR(255), client_port INT, client_last_active VARCHAR(255), client_ddos_status BOOLEAN)"
     )
     
     db_manager.create_table(
-        "decrypted_media",
-        "(user_id VARCHAR(255), media_type_id INT, path_to_decrypted_media VARCHAR(255))"
-    )
-    
-    db_manager.create_table(
-        "media_menu",
-        "(id_media INT PRIMARY KEY, image_path VARCHAR(255), audio_path VARCHAR(255), video_path VARCHAR(255))"
+        "files",
+        "(file_id INT PRIMARY KEY, file_owner_id INT, file_original_path VARCHAR(255), file_result_path VARCHAR(255), file_orig_size VARCHAR(255), file_new_size VARCHAR(255))"
     )
 
-def populate_media_menu(db_manager):
-    """
-    Populate the media_menu table with predefined data if it's empty.
-    
-    Args:
-        db_manager: An initialized DatabaseManager instance
-    """
-    predefined_media = [
-        (1, r"C:\Users\Mamriot_User\Desktop\secret_service_project\JPG\Ransom.jpg", None, None),
-        (2, r"C:\Users\Mamriot_User\Desktop\secret_service_project\JPG\cover1_image.jpg", None, None),
-        (3, None, None, r"C:\Users\Mamriot_User\Desktop\secret_service_project\MP4\video.mp4")
-    ]
 
-    existing_rows = db_manager.get_all_rows("media_menu")
-    if not existing_rows:
-        for media in predefined_media:
-            db_manager.insert_row(
-                "media_menu",
-                "(id_media, image_path, audio_path, video_path)",
-                "(%s, %s, %s, %s)",
-                media
-            )
+def populate_clients(db_manager):
+    all_rows = get_all_rows("clients")
+    if len(all_rows) == 0:
+        insert_row("clients",
+                           "(client_id, client_username, client_password, client_ip, client_port, client_last_active, client_ddos_status)",
+                           "(%s, %s, %s, %s, %s, %s, %s)",
+                           (1, "user", 0, 0, 0, 0, False))
